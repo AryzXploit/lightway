@@ -1056,4 +1056,45 @@ mod tests {
         assert!(monitor_task.is_ok());
         assert!(monitor_task.unwrap().is_none());
     }
+
+    #[tokio::test]
+    #[serial_test::serial(route_manager)]
+    #[ignore = "Requires network privileges and may remove legitimate routes"]
+    async fn test_cleanup_sync_removes_preexisting_route() {
+        let (_restorer, tun_device, mut route_manager) =
+            create_test_setup(RouteMode::Default).await.unwrap();
+
+        let tun_index = tun_device.if_index().unwrap();
+        let preexisting_route = Route::new(TUNNEL_ROUTES[0].0, TUNNEL_ROUTES[0].1)
+            .with_gateway(TUN_PEER_IP)
+            .with_if_index(tun_index);
+
+        route_manager
+            .route_manager
+            .add(&preexisting_route)
+            .expect("failed to install pre-existing route");
+
+        let before_cleanup = route_manager.route_manager.list().unwrap();
+        assert!(
+            before_cleanup
+                .iter()
+                .any(|route| routes_equal(route, &preexisting_route)),
+            "pre-existing route missing before cleanup"
+        );
+
+        route_manager
+            .add_route_vpn(preexisting_route.clone())
+            .await
+            .expect("add_route_vpn should treat existing route as success");
+
+        route_manager.cleanup_sync();
+
+        let after_cleanup = route_manager.route_manager.list().unwrap();
+        assert!(
+            !after_cleanup
+                .iter()
+                .any(|route| routes_equal(route, &preexisting_route)),
+            "cleanup removed a route we did not install"
+        );
+    }
 }
